@@ -1,5 +1,5 @@
 /**
- * This should only be used when a task must run in real time. When tasks are running within an animation, use `pixi-timeout` which utilizes the animation timer.
+ * Waits for the specified number of milliseconds using {@link setTimeout}
  */
 export function timeout(milliseconds: number) {
 	return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));

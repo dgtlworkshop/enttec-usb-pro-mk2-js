@@ -1,0 +1,6 @@
+/scripts
+/.vscode
+/.prettierrc
+/.github
+/*.tgz
+/tests

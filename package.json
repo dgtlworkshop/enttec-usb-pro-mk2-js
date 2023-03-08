@@ -1,10 +1,13 @@
 {
-	"name": "enttec-usb-pro-mk2",
+	"name": "@dgtlworkshop/enttec-usb-pro-mk2",
 	"version": "1.0.0",
-	"description": "",
+	"description": "Typescript API for interacting with an Enttec DMX USB Pro Mk2",
 	"main": "dist/index.js",
 	"types": "dist/index.d.ts",
 	"type": "module",
+	"files": [
+		"dist"
+	],
 	"exports": {
 		".": {
 			"require": null,
