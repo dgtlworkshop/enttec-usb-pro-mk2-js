@@ -20,7 +20,8 @@
 		"build": "tsc",
 		"lint": "prettier --ignore-path .gitignore --check --plugin-search-dir=. .",
 		"format": "prettier --ignore-path .gitignore --write --plugin-search-dir=. .",
-    "prepack": "npm run build"
+    "clean": "node scripts/cleanup.mjs",
+    "prepack": "npm run clean && npm run build"
 	},
 	"repository": {
 		"type": "git",
