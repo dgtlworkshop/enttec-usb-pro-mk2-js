@@ -40,10 +40,6 @@ export class EnttecUsbMk2Pro extends EventEmitter {
 			.map((this_device) => {
 				return this_device.path;
 			});
-
-		if (enttec_devices.length === 0) {
-			console.debug(JSON.stringify(all_devices));
-		}
 		return enttec_devices;
 	}
 

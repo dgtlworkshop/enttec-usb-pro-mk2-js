@@ -4,6 +4,7 @@
 	"description": "Typescript API for interacting with an Enttec DMX USB Pro Mk2",
 	"module": "dist/index.js",
 	"types": "dist/index.d.ts",
+	"bin": "dist/cli.js",
 	"type": "module",
 	"files": [
 		"dist"
@@ -20,8 +21,8 @@
 		"build": "tsc",
 		"lint": "prettier --ignore-path .gitignore --check --plugin-search-dir=. .",
 		"format": "prettier --ignore-path .gitignore --write --plugin-search-dir=. .",
-    "clean": "node scripts/cleanup.mjs",
-    "prepack": "npm run clean && npm run build"
+		"clean": "node scripts/cleanup.mjs",
+		"prepack": "npm run clean && npm run build"
 	},
 	"repository": {
 		"type": "git",
@@ -34,7 +35,8 @@
 	},
 	"homepage": "https://github.com/dgtlworkshop/enttec-usb-pro-mk2-js#readme",
 	"dependencies": {
-		"serialport": "^10.5.0"
+		"serialport": "^10.5.0",
+		"commander": "^10.0.0"
 	},
 	"devDependencies": {
 		"@types/serialport": "^8.0.2",
