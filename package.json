@@ -21,6 +21,7 @@
 		"build": "tsc",
 		"lint": "prettier --ignore-path .gitignore --check --plugin-search-dir=. .",
 		"format": "prettier --ignore-path .gitignore --write --plugin-search-dir=. .",
+		"cycle-colors": "node dist/tests/cycle-colors.js",
 		"clean": "node scripts/cleanup.mjs",
 		"prepack": "npm run clean && npm run build"
 	},
