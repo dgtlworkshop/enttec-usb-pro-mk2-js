@@ -1,7 +1,8 @@
+import { program } from "commander";
+
+import type { EnttecUsbMk2Pro } from "../src/EnttecProUSB.js";
 import { connect } from "../src/helpers/connect.js";
 import { timeout } from "../src/helpers/timeout.js";
-import { program } from "commander";
-import type { EnttecUsbMk2Pro } from "../src/EnttecProUSB.js";
 
 program
 	.name("enttec-usb-pro-mk2 cycle-addresses")
