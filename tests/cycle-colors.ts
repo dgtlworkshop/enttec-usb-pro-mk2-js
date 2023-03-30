@@ -8,7 +8,7 @@ program
 	.name("enttec-usb-pro-mk2 cycle-addresses")
 	.description("Cycles DMX values")
 	.option("-d --delay", "Delay in ms between changes", "1000")
-	.action(async (delay, options) => {
+	.action(async (options) => {
 		let enttec: EnttecUsbMk2Pro;
 		try {
 			enttec = await connect();
@@ -16,7 +16,7 @@ program
 			program.error(String(error));
 		}
 		const buffer = enttec.getAll(0);
-		delay = parseInt(delay);
+		const delay = parseInt(options.delay) ?? 1000;
 
 		console.info("Starting with delay of", delay, "ms");
 
