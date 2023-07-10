@@ -1,8 +1,5 @@
 {
 	"javascript.preferences.importModuleSpecifierEnding": "js",
 	"typescript.preferences.importModuleSpecifierEnding": "js",
-	"cSpell.words": [
-		"Enttec",
-		"npmrc"
-	]
+	"cSpell.words": ["Enttec", "npmrc"]
 }

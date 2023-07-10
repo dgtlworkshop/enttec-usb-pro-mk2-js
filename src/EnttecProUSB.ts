@@ -5,17 +5,60 @@ import { timeout } from "./helpers/timeout.js";
 import { arraysEqual } from "./helpers/arrays.js";
 import { EnttecMessageLables } from "./EnttecMessageLabels.js";
 
+/**
+ * @example
+ * import { EnttecUsbMk2Pro } from "@dgtlworkshop/enttec-usb-pro-mk2";
+ * // Find all the valid devices connected to the system
+ * const devices = await EnttecUsbMk2Pro.FindDevice();
+ *
+ * // Setup the first device
+ * const enttec = new EnttecUsbMk2Pro(devices[0]);
+ * await enttec.init();
+ *
+ * // Get the data buffer from the first DMX output port
+ * const port = 0;
+ * const address_space = enttec.getAll(port);
+ *
+ * // Set DMX address 1 to value 255
+ * address_space[1] = 255;
+ *
+ * // write the address values back
+ * await enttec.setAll(port, address_space);
+ *
+ * // close the device
+ * await enttec.close();
+ */
 export class EnttecUsbMk2Pro extends EventEmitter {
 	private serialport: SerialPort;
 	private _mode: "send" | "receive";
 	public get mode(): "send" | "receive" {
 		return this._mode;
 	}
-	private readonly recieved_data = new Uint8ClampedArray(513);
+	/** Is the SerialPort currently connected */
+	public get isOpen(): boolean {
+		return this.serialport.isOpen;
+	}
+	/**
+	 * Automatically reconnect every {@link retry_connection_timeout} milliseconds if the enttec is disconnected. Disables reconnect if the number is undefined.
+	 * @default 2000
+	 */
+	public retry_connection_timeout?: number;
+	private readonly received_data = new Uint8ClampedArray(513);
 	private readonly addresses_port1 = new Uint8ClampedArray(513);
 	private readonly addresses_port2 = new Uint8ClampedArray(513);
 
-	constructor(path: string) {
+	/**
+	 * Creates, but does not start the device connection. To start the device, use {@link EnttecUsbMk2Pro.init}
+	 * @param path Device Serial path from {@link EnttecUsbMk2Pro.FindDevice}
+	 * @param options.retry_connection_timeout See {@link EnttecUsbMk2Pro.retry_connection_timeout}
+	 */
+	constructor(
+		path: string,
+		options: {
+			/** See {@link EnttecUsbMk2Pro.retry_connection_timeout} */
+			retry_connection_timeout?: number;
+		} = {},
+	) {
 		super();
 		this.serialport = new SerialPort({
 			path,
@@ -26,8 +69,19 @@ export class EnttecUsbMk2Pro extends EventEmitter {
 			parity: "none",
 		});
 		this._mode = "send";
+		this.retry_connection_timeout = options.retry_connection_timeout ?? 2000;
 	}
 
+	/**
+	 * Searches the host system for USB devices that match the VendorID/ProductID of the Enttec USB Pro Mk2
+	 * @returns An array of USB device paths. One of which can be passed to the {@link EnttecUsbMk2Pro} constructor
+	 * @example
+	 *  // Find all the valid devices connected to the system
+	 * const devices = await EnttecUsbMk2Pro.FindDevice();
+	 *
+	 * // Setup the first device
+	 * const enttec = new EnttecUsbMk2Pro(devices[0]);
+	 */
 	static async FindDevice() {
 		const all_devices = await SerialPort.list();
 		const enttec_devices = all_devices
@@ -41,25 +95,37 @@ export class EnttecUsbMk2Pro extends EventEmitter {
 				return this_device.path;
 			});
 
-		if (enttec_devices.length === 0) {
-			console.debug(JSON.stringify(all_devices));
-		}
+		// if (enttec_devices.length === 0) {
+		// 	console.debug(JSON.stringify(all_devices));
+		// }
 		return enttec_devices;
 	}
 
+	/**
+	 * Initializes the device connection. If {@link retry_connection_timeout}
+	 */
 	public async init() {
 		/** Exit this init if another init successfully connected */
 		let early_exit = false;
-		await new Promise<void>((resolve) => {
+		await new Promise<void>((resolve, reject) => {
 			if (this.serialport.isOpen) {
 				early_exit = true;
 			} else {
 				this.serialport.open(async (err) => {
 					if (err) {
 						console.error(err);
-						console.warn(`EnttecProUSB::Could not connect to ${this.serialport.path}. Retrying...`);
-						await timeout(2000);
-						await this.init();
+						if (Number.isFinite(this.retry_connection_timeout)) {
+							console.warn(
+								`EnttecProUSB::init: Could not connect to ${this.serialport.path}. Retrying...`,
+							);
+							await timeout(this.retry_connection_timeout!);
+							await this.init();
+						} else {
+							console.warn(
+								`EnttecProUSB::init: Could not connect to ${this.serialport.path}. Not retrying`,
+							);
+							reject(err);
+						}
 						early_exit = true;
 					}
 					resolve();
@@ -72,7 +138,7 @@ export class EnttecUsbMk2Pro extends EventEmitter {
 		this.startSerialPortListener();
 
 		const api_key_buffer = new DataView(new ArrayBuffer(Uint32Array.BYTES_PER_ELEMENT));
-		api_key_buffer.setUint32(0, 0xe403a4c9, true); // Harcoded Enttec API Key
+		api_key_buffer.setUint32(0, 0xe403a4c9, true); // Hardcoded Enttec API Key
 
 		await this.sendPacket(EnttecMessageLables.SET_API_KEY, api_key_buffer.buffer);
 		await this.sendPacket(
@@ -129,11 +195,11 @@ export class EnttecUsbMk2Pro extends EventEmitter {
 		const new_data = new Uint8ClampedArray(raw_data.slice(6));
 
 		// Ignore if the data hasn't changed
-		if (arraysEqual(new_data, this.recieved_data)) {
+		if (arraysEqual(new_data, this.received_data)) {
 			return;
 		}
-		this.recieved_data.set(new_data);
-		this.emit("dmxdata", this.recieved_data);
+		this.received_data.set(new_data);
+		this.emit("dmxdata", this.received_data);
 	}
 
 	/**
