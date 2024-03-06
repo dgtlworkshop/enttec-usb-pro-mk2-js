@@ -1,9 +1,14 @@
-import { EventEmitter } from "events";
+import { Chrono, Equality } from "@dgtlworkshop/handyjs";
 import { SerialPort } from "serialport";
+import { PacketLengthParser } from "@serialport/parser-packet-length";
+import { EnttecMessageLabels } from "./EnttecMessageLabels.js";
+import { TEventEmitter } from "./TEventEmitter.js";
+import { IncomingDataType, getLength } from "./helpers.js";
 
-import { timeout } from "./helpers/timeout.js";
-import { arraysEqual } from "./helpers/arrays.js";
-import { EnttecMessageLables } from "./EnttecMessageLabels.js";
+/**
+ * API Documentation based on Enttec DMX USB PRO
+ * @see https://cdn.enttec.com/pdf/assets/70304/70304_DMX_USB_PRO_API.pdf
+ */
 
 /**
  * @example
@@ -28,12 +33,23 @@ import { EnttecMessageLables } from "./EnttecMessageLabels.js";
  * // close the device
  * await enttec.close();
  */
-export class EnttecUsbMk2Pro extends EventEmitter {
-	private serialport: SerialPort;
-	private _mode: "send" | "receive";
-	public get mode(): "send" | "receive" {
-		return this._mode;
-	}
+export class EnttecUsbMk2Pro extends TEventEmitter<{
+	error: (error: Error) => void;
+	retrying: (error: Error) => void;
+	close: () => void;
+	end: () => void;
+	params: (raw_data: Uint8Array) => void;
+	dmx_data: (
+		/** A `513` byte array of all the DMX data, starting at address `1` */
+		current_data: Uint8ClampedArray,
+	) => void;
+}> {
+	private readonly serialport: SerialPort;
+	private readonly parser;
+	// private _mode: "send" | "receive" = "send";
+	// public get mode(): "send" | "receive" {
+	// 	return this._mode;
+	// }
 	/** Is the SerialPort currently connected */
 	public get isOpen(): boolean {
 		return this.serialport.isOpen;
@@ -68,7 +84,15 @@ export class EnttecUsbMk2Pro extends EventEmitter {
 			stopBits: 2,
 			parity: "none",
 		});
-		this._mode = "send";
+		this.parser = this.serialport.pipe(
+			new PacketLengthParser({
+				delimiter: EnttecMessageLabels.DMX_START_CODE,
+				packetOverhead: 5,
+				lengthBytes: 2,
+				lengthOffset: 2,
+				maxLen: 650,
+			}),
+		);
 		this.retry_connection_timeout = options.retry_connection_timeout ?? 2000;
 	}
 
@@ -102,7 +126,7 @@ export class EnttecUsbMk2Pro extends EventEmitter {
 	}
 
 	/**
-	 * Initializes the device connection. If {@link retry_connection_timeout}
+	 * Initializes the device connection. If {@link retry_connection_timeout} is set, this will keep retrying
 	 */
 	public async init() {
 		/** Exit this init if another init successfully connected */
@@ -111,20 +135,15 @@ export class EnttecUsbMk2Pro extends EventEmitter {
 			if (this.serialport.isOpen) {
 				early_exit = true;
 			} else {
-				this.serialport.open(async (err) => {
-					if (err) {
-						console.error(err);
-						if (Number.isFinite(this.retry_connection_timeout)) {
-							console.warn(
-								`EnttecProUSB::init: Could not connect to ${this.serialport.path}. Retrying...`,
-							);
-							await timeout(this.retry_connection_timeout!);
+				this.serialport.open(async (error) => {
+					if (error) {
+						if (this.retry_connection_timeout && Number.isFinite(this.retry_connection_timeout)) {
+							this.emit("retrying", error);
+							await Chrono.timeout(this.retry_connection_timeout!);
 							await this.init();
 						} else {
-							console.warn(
-								`EnttecProUSB::init: Could not connect to ${this.serialport.path}. Not retrying`,
-							);
-							reject(err);
+							this.emit("error", error);
+							reject(error);
 						}
 						early_exit = true;
 					}
@@ -140,9 +159,9 @@ export class EnttecUsbMk2Pro extends EventEmitter {
 		const api_key_buffer = new DataView(new ArrayBuffer(Uint32Array.BYTES_PER_ELEMENT));
 		api_key_buffer.setUint32(0, 0xe403a4c9, true); // Hardcoded Enttec API Key
 
-		await this.sendPacket(EnttecMessageLables.SET_API_KEY, api_key_buffer.buffer);
+		await this.sendPacket(EnttecMessageLabels.SET_API_KEY, api_key_buffer.buffer);
 		await this.sendPacket(
-			EnttecMessageLables.SET_PORT_ASSIGNMENT,
+			EnttecMessageLabels.SET_PORT_ASSIGNMENT,
 			new Uint8Array([
 				1, // Port 1 enabled for DMX and RDM
 				1, // Port 2 enabled for DMX and RDM
@@ -153,6 +172,7 @@ export class EnttecUsbMk2Pro extends EventEmitter {
 	public close() {
 		return new Promise<void>((resolve, reject) => {
 			this.serialport.close((err) => {
+				this.serialport.removeAllListeners();
 				if (err) reject(err);
 				else resolve();
 			});
@@ -163,43 +183,53 @@ export class EnttecUsbMk2Pro extends EventEmitter {
 	 * Listen incoming data from the serial port
 	 */
 	protected startSerialPortListener() {
-		// console.log("starting listener");
-		this.serialport.on("data", (raw_data) => {
-			const messageType = raw_data[1];
-			switch (messageType) {
-				case EnttecMessageLables.GET_WIDGET_PARAMS_REPLY:
-					this.handleIncomingParamsReply(raw_data);
+		// console.debug("starting listener");
+		this.parser.on("data", (full_message: IncomingDataType) => {
+			const data = new Uint8Array(full_message);
+			const message_label = data[1];
+			switch (message_label) {
+				case EnttecMessageLabels.GET_WIDGET_PARAMS_REPLY:
+					this.handleIncomingParamsReply(data);
 					break;
-				case EnttecMessageLables.RECEIVE_DMX_PORT1:
-					this.handleIncomingDmxPacket(raw_data);
+				case EnttecMessageLabels.RECEIVE_DMX_PORT1:
+					this.handleIncomingDmxPacket(data);
+					break;
+				default:
+					this.emit("error", new Error("Unknown Enttec USB message", { cause: full_message }));
 					break;
 			}
 		});
 
-		this.serialport.on("error", function (err) {
-			console.error(err);
-		});
+		this.serialport.on("close", () => this.emit("close"));
+		this.serialport.on("end", () => this.emit("end"));
+		this.serialport.on("error", (error) => this.emit("error", error));
 	}
 
-	protected handleIncomingParamsReply(raw_data: any) {
-		console.debug("params received", raw_data);
+	protected handleIncomingParamsReply(full_message: Uint8Array) {
+		this.emit("params", full_message);
 	}
 
 	/**
 	 * Store the last received dmx data values and
 	 * emit the packet as a `dmxdata event.
-	 * @param raw_data
+	 * @param full_message
 	 * @private
 	 */
-	protected handleIncomingDmxPacket(raw_data: number[] | ArrayBuffer | Buffer) {
-		const new_data = new Uint8ClampedArray(raw_data.slice(6));
+	protected handleIncomingDmxPacket(full_message: Uint8Array) {
+		const dmx_data = new Uint8ClampedArray(513);
+		try {
+			// Remove the last byte, add starting spacer byte
+			dmx_data.set(full_message.slice(6, full_message.byteLength - 1), 1);
 
-		// Ignore if the data hasn't changed
-		if (arraysEqual(new_data, this.received_data)) {
-			return;
+			// Ignore if the data hasn't changed
+			if (Equality.arraysEqual(dmx_data, this.received_data)) {
+				return;
+			}
+			this.received_data.set(dmx_data);
+			this.emit("dmx_data", dmx_data);
+		} catch (error) {
+			this.emit("error", error instanceof Error ? error : new Error(String(error)));
 		}
-		this.received_data.set(new_data);
-		this.emit("dmxdata", this.received_data);
 	}
 
 	/**
@@ -209,10 +239,10 @@ export class EnttecUsbMk2Pro extends EventEmitter {
 	 */
 	protected write(buffer: ArrayBuffer | Buffer) {
 		return new Promise<void>((resolve, reject) => {
-			this.serialport.write(Buffer.from(buffer), (err) => {
+			this.serialport.write(new Uint8Array(buffer), (error) => {
 				this.serialport.drain();
-				if (err) {
-					this.emit("error", err);
+				if (error) {
+					this.emit("error", error);
 					reject();
 				} else {
 					resolve();
@@ -224,19 +254,19 @@ export class EnttecUsbMk2Pro extends EventEmitter {
 	/**
 	 * Sends a single packet to the usbpro.
 	 * @param label The message label.
-	 * @param data The message payload.
+	 * @param payload The message payload.
 	 * @returns  A promise indicating when the data has been sent.
 	 */
-	protected sendPacket(label: EnttecMessageLables, data: ArrayBuffer | ArrayLike<number>) {
-		const byte_length = data instanceof ArrayBuffer ? data.byteLength : data.length;
-		const buffer = new Uint8Array(byte_length + 5);
+	protected sendPacket(label: EnttecMessageLabels, payload: ArrayBuffer | Buffer | number[]) {
+		const byte_length = getLength(payload);
+		const buffer = new Uint8Array(byte_length + 5); // 5 = front header + end delineator
 		const data_view = new DataView(buffer.buffer);
 
-		data_view.setUint8(0, EnttecMessageLables.DMX_START_CODE);
+		data_view.setUint8(0, EnttecMessageLabels.DMX_START_CODE);
 		data_view.setUint8(1, label);
 		data_view.setUint16(2, byte_length, true);
-		buffer.set(new Uint8Array(data), 4);
-		data_view.setUint8(buffer.byteLength - 1, EnttecMessageLables.DMX_END_CODE); // usbpro packet end marker
+		buffer.set(new Uint8Array(payload), 4);
+		data_view.setUint8(buffer.byteLength - 1, EnttecMessageLabels.DMX_END_CODE); // usbpro packet end marker
 
 		return this.write(buffer);
 	}
@@ -247,10 +277,10 @@ export class EnttecUsbMk2Pro extends EventEmitter {
 	 * DMX Address 1 is Index 1.
 	 * @param port - Zero based porn number to send the data to
 	 */
-	public async setAll(port: 0 | 1, dmx_data: Uint8ClampedArray | Uint8Array | number[]) {
+	public async setAll(port: 0 | 1, dmx_data: Uint8ClampedArray | Uint8Array | Buffer | number[]) {
 		// for whatever-reason, dmx-transmission has to start with a zero-byte.
 		dmx_data[0] = 0;
-		const label = [EnttecMessageLables.SEND_DMX_PORT1, EnttecMessageLables.SEND_DMX_PORT2][port];
+		const label = [EnttecMessageLabels.SEND_DMX_PORT1, EnttecMessageLabels.SEND_DMX_PORT2][port];
 		switch (port) {
 			case 0:
 				this.addresses_port1.set(dmx_data);
@@ -262,7 +292,8 @@ export class EnttecUsbMk2Pro extends EventEmitter {
 		await this.sendPacket(label, dmx_data);
 	}
 
-	public getValue(port: 0 | 1, address: number) {
+	/** Gets the currently outputted DMX value for specified address */
+	public getValue(port: 0 | 1, address: number): number {
 		switch (port) {
 			case 0:
 				return this.addresses_port1[address];
@@ -271,10 +302,21 @@ export class EnttecUsbMk2Pro extends EventEmitter {
 		}
 	}
 
+	/** Gets the last read DMX value */
+	public getReadValue(address: number) {
+		return this.received_data[address];
+	}
+	/** Gets a copy of the last read DMX values */
+	public getAllRead() {
+		return new Uint8ClampedArray(this.received_data);
+	}
+
+	/** Gets the currently outputted DMX data for the selected port */
 	public getAll(port: 0 | 1) {
 		return new Uint8ClampedArray(port ? this.addresses_port2 : this.addresses_port2);
 	}
 
+	/** Sets a specific value for a specific address */
 	public set(port: 0 | 1, address: number, value: number) {
 		const data = this.getAll(port);
 		data[address] = value;
@@ -283,21 +325,20 @@ export class EnttecUsbMk2Pro extends EventEmitter {
 
 	/**
 	 * Request the current config & status information
-	 *
-	 * @todo
+	 * @todo No parsing implemented
 	 */
 	protected async getDeviceInfo() {
 		this.serialport.drain();
-		await this.sendPacket(EnttecMessageLables.GET_WIDGET_PARAMS, Buffer.from([0, 0]));
+		await this.sendPacket(EnttecMessageLabels.GET_WIDGET_PARAMS, new Uint8Array([0, 0]));
 	}
 
 	/**
-	 * Set the DMX device to input _mode
+	 * Tells the Enttec to start reading incoming DMX data from Port 1
 	 */
 	public async startDmxRead() {
-		this._mode = "receive";
-		this.serialport.drain();
-		await this.sendPacket(EnttecMessageLables.RECEIVE_DMX_PORT1, Buffer.from([0, 0]));
-		await this.sendPacket(EnttecMessageLables.RECEIVE_DMX_ON_CHANGE, Buffer.from([0, 0]));
+		// this._mode = "receive";
+		await new Promise((resolve) => this.serialport.drain(resolve));
+		await this.sendPacket(EnttecMessageLabels.RECEIVE_DMX_PORT1, new Uint8Array([0, 0]));
+		await this.sendPacket(EnttecMessageLabels.RECEIVE_DMX_ON_CHANGE, new Uint8Array([0, 0]));
 	}
 }
