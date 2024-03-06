@@ -1,4 +1,4 @@
-export enum EnttecMessageLables {
+export const enum EnttecMessageLabels {
 	SEND_DMX_PORT1 = 0x06,
 	SEND_DMX_PORT2 = 0xca,
 	SET_API_KEY = 0x0d,

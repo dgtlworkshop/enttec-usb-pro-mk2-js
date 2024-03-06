@@ -1,17 +1,7 @@
-import { EventEmitter } from "node:events";
-import { SerialPort } from "serialport";
 import { Chrono, Equality } from "@dgtlworkshop/handyjs";
-import type TypedEmitter from "typed-emitter";
-import { EnttecMessageLables } from "./EnttecMessageLabels.js";
-
-type EnttecEvents = {
-	error: (error: Error) => void;
-	retrying: (error: Error) => void;
-	close: () => void;
-	end: () => void;
-	params: (raw_data: any) => void;
-	dmx_data: (current_data: Uint8ClampedArray) => void;
-};
+import { SerialPort } from "serialport";
+import { EnttecMessageLabels } from "./EnttecMessageLabels.js";
+import { TEventEmitter } from "./TEventEmitter.js";
 
 /**
  * @example
@@ -36,12 +26,19 @@ type EnttecEvents = {
  * // close the device
  * await enttec.close();
  */
-export class EnttecUsbMk2Pro extends (EventEmitter as new () => TypedEmitter<EnttecEvents>) {
+export class EnttecUsbMk2Pro extends TEventEmitter<{
+	error: (error: Error) => void;
+	retrying: (error: Error) => void;
+	close: () => void;
+	end: () => void;
+	params: (raw_data: any) => void;
+	dmx_data: (current_data: Uint8ClampedArray) => void;
+}> {
 	private serialport: SerialPort;
-	private _mode: "send" | "receive" = "send";
-	public get mode(): "send" | "receive" {
-		return this._mode;
-	}
+	// private _mode: "send" | "receive" = "send";
+	// public get mode(): "send" | "receive" {
+	// 	return this._mode;
+	// }
 	/** Is the SerialPort currently connected */
 	public get isOpen(): boolean {
 		return this.serialport.isOpen;
@@ -142,9 +139,9 @@ export class EnttecUsbMk2Pro extends (EventEmitter as new () => TypedEmitter<Ent
 		const api_key_buffer = new DataView(new ArrayBuffer(Uint32Array.BYTES_PER_ELEMENT));
 		api_key_buffer.setUint32(0, 0xe403a4c9, true); // Hardcoded Enttec API Key
 
-		await this.sendPacket(EnttecMessageLables.SET_API_KEY, api_key_buffer.buffer);
+		await this.sendPacket(EnttecMessageLabels.SET_API_KEY, api_key_buffer.buffer);
 		await this.sendPacket(
-			EnttecMessageLables.SET_PORT_ASSIGNMENT,
+			EnttecMessageLabels.SET_PORT_ASSIGNMENT,
 			new Uint8Array([
 				1, // Port 1 enabled for DMX and RDM
 				1, // Port 2 enabled for DMX and RDM
@@ -155,6 +152,7 @@ export class EnttecUsbMk2Pro extends (EventEmitter as new () => TypedEmitter<Ent
 	public close() {
 		return new Promise<void>((resolve, reject) => {
 			this.serialport.close((err) => {
+				this.serialport.removeAllListeners();
 				if (err) reject(err);
 				else resolve();
 			});
@@ -169,11 +167,14 @@ export class EnttecUsbMk2Pro extends (EventEmitter as new () => TypedEmitter<Ent
 		this.serialport.on("data", (raw_data) => {
 			const messageType = raw_data[1];
 			switch (messageType) {
-				case EnttecMessageLables.GET_WIDGET_PARAMS_REPLY:
+				case EnttecMessageLabels.GET_WIDGET_PARAMS_REPLY:
 					this.handleIncomingParamsReply(raw_data);
 					break;
-				case EnttecMessageLables.RECEIVE_DMX_PORT1:
+				case EnttecMessageLabels.RECEIVE_DMX_PORT1:
 					this.handleIncomingDmxPacket(raw_data);
+					break;
+				default:
+					this.emit("error", new Error("Unknown Enttec USB message", { cause: raw_data }));
 					break;
 			}
 		});
@@ -195,6 +196,8 @@ export class EnttecUsbMk2Pro extends (EventEmitter as new () => TypedEmitter<Ent
 	 */
 	protected handleIncomingDmxPacket(raw_data: number[] | ArrayBuffer | Buffer) {
 		const new_data = new Uint8ClampedArray(raw_data.slice(6));
+
+		console.info("EnttecProUSB::handleIncomingDmxPacket", raw_data);
 
 		// Ignore if the data hasn't changed
 		if (Equality.arraysEqual(new_data, this.received_data)) {
@@ -229,16 +232,16 @@ export class EnttecUsbMk2Pro extends (EventEmitter as new () => TypedEmitter<Ent
 	 * @param data The message payload.
 	 * @returns  A promise indicating when the data has been sent.
 	 */
-	protected sendPacket(label: EnttecMessageLables, data: ArrayBuffer | ArrayLike<number>) {
+	protected sendPacket(label: EnttecMessageLabels, data: ArrayBuffer | ArrayLike<number>) {
 		const byte_length = data instanceof ArrayBuffer ? data.byteLength : data.length;
 		const buffer = new Uint8Array(byte_length + 5);
 		const data_view = new DataView(buffer.buffer);
 
-		data_view.setUint8(0, EnttecMessageLables.DMX_START_CODE);
+		data_view.setUint8(0, EnttecMessageLabels.DMX_START_CODE);
 		data_view.setUint8(1, label);
 		data_view.setUint16(2, byte_length, true);
 		buffer.set(new Uint8Array(data), 4);
-		data_view.setUint8(buffer.byteLength - 1, EnttecMessageLables.DMX_END_CODE); // usbpro packet end marker
+		data_view.setUint8(buffer.byteLength - 1, EnttecMessageLabels.DMX_END_CODE); // usbpro packet end marker
 
 		return this.write(buffer);
 	}
@@ -252,7 +255,7 @@ export class EnttecUsbMk2Pro extends (EventEmitter as new () => TypedEmitter<Ent
 	public async setAll(port: 0 | 1, dmx_data: Uint8ClampedArray | Uint8Array | number[]) {
 		// for whatever-reason, dmx-transmission has to start with a zero-byte.
 		dmx_data[0] = 0;
-		const label = [EnttecMessageLables.SEND_DMX_PORT1, EnttecMessageLables.SEND_DMX_PORT2][port];
+		const label = [EnttecMessageLabels.SEND_DMX_PORT1, EnttecMessageLabels.SEND_DMX_PORT2][port];
 		switch (port) {
 			case 0:
 				this.addresses_port1.set(dmx_data);
@@ -300,16 +303,16 @@ export class EnttecUsbMk2Pro extends (EventEmitter as new () => TypedEmitter<Ent
 	 */
 	protected async getDeviceInfo() {
 		this.serialport.drain();
-		await this.sendPacket(EnttecMessageLables.GET_WIDGET_PARAMS, new Uint8Array([0, 0]));
+		await this.sendPacket(EnttecMessageLabels.GET_WIDGET_PARAMS, new Uint8Array([0, 0]));
 	}
 
 	/**
 	 * Set the DMX device to input _mode
 	 */
 	public async startDmxRead() {
-		this._mode = "receive";
-		this.serialport.drain();
-		await this.sendPacket(EnttecMessageLables.RECEIVE_DMX_PORT1, new Uint8Array([0, 0]));
-		await this.sendPacket(EnttecMessageLables.RECEIVE_DMX_ON_CHANGE, new Uint8Array([0, 0]));
+		// this._mode = "receive";
+		await new Promise((resolve) => this.serialport.drain(resolve));
+		await this.sendPacket(EnttecMessageLabels.RECEIVE_DMX_PORT1, new Uint8Array([0, 0]));
+		await this.sendPacket(EnttecMessageLabels.RECEIVE_DMX_ON_CHANGE, new Uint8Array([0, 0]));
 	}
 }
