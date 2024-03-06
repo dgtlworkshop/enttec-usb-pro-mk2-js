@@ -21,7 +21,8 @@
 		"lint": "prettier --ignore-path .gitignore --check --plugin-search-dir=. .",
 		"format": "prettier --ignore-path .gitignore --write --plugin-search-dir=. .",
 		"clean": "node scripts/cleanup.mjs",
-		"prepack": "npm run clean && npm run build && publint"
+		"prepack": "npm run clean && npm run build && publint",
+		"verify-version": "node scripts/verify-against-version.mjs"
 	},
 	"repository": {
 		"type": "git",
