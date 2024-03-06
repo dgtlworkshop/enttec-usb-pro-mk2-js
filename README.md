@@ -1,6 +1,6 @@
 # Enttec DMX USB Pro MK2 for NodeJS
 
-Uses the Node [`serialport`](https://serialport.io/) package to provide an API to send and receive DMX using an [Enttec DMX USB Pro MK2](https://www.enttec.com/product/uncategorized/dmx-usb-pro-interface/)
+Uses the Node [`serialport`](https://serialport.io/) package to provide an API to send and receive DMX using an [Enttec DMX USB Pro MK2](https://www.enttec.com/product/uncategorized/dmx-usb-pro-interface/). Likely also works with the [Enttec DMX USB Pro](https://www.enttec.com/product/dmx-usb-interfaces/dmx-usb-pro-professional-1u-usb-to-dmx512-converter/), though only port 1 will function.
 
 ```bash
 echo "@dgtlworkshop:registry=https://npm.pkg.github.com" >> .npmrc
@@ -32,9 +32,5 @@ await enttec.setAll(port, address_space);
 // close the device
 await enttec.close();
 ```
-
-## Fixtures and Animations
-
-// TODO
 
 ## Development

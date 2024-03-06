@@ -1,7 +1,14 @@
 import { Chrono, Equality } from "@dgtlworkshop/handyjs";
-import { PacketLengthParser, SerialPort } from "serialport";
+import { SerialPort } from "serialport";
+import { PacketLengthParser } from "@serialport/parser-packet-length";
 import { EnttecMessageLabels } from "./EnttecMessageLabels.js";
 import { TEventEmitter } from "./TEventEmitter.js";
+import { IncomingDataType, getLength } from "./helpers.js";
+
+/**
+ * API Documentation based on Enttec DMX USB PRO
+ * @see https://cdn.enttec.com/pdf/assets/70304/70304_DMX_USB_PRO_API.pdf
+ */
 
 /**
  * @example
@@ -31,8 +38,11 @@ export class EnttecUsbMk2Pro extends TEventEmitter<{
 	retrying: (error: Error) => void;
 	close: () => void;
 	end: () => void;
-	params: (raw_data: any) => void;
-	dmx_data: (current_data: Uint8ClampedArray) => void;
+	params: (raw_data: Uint8Array) => void;
+	dmx_data: (
+		/** A `513` byte array of all the DMX data, starting at address `1` */
+		current_data: Uint8ClampedArray,
+	) => void;
 }> {
 	private readonly serialport: SerialPort;
 	private readonly parser;
@@ -174,17 +184,18 @@ export class EnttecUsbMk2Pro extends TEventEmitter<{
 	 */
 	protected startSerialPortListener() {
 		// console.debug("starting listener");
-		this.serialport.on("data", (raw_data) => {
-			const messageType = raw_data[1];
-			switch (messageType) {
+		this.parser.on("data", (full_message: IncomingDataType) => {
+			const data = new Uint8Array(full_message);
+			const message_label = data[1];
+			switch (message_label) {
 				case EnttecMessageLabels.GET_WIDGET_PARAMS_REPLY:
-					this.handleIncomingParamsReply(raw_data);
+					this.handleIncomingParamsReply(data);
 					break;
 				case EnttecMessageLabels.RECEIVE_DMX_PORT1:
-					this.handleIncomingDmxPacket(raw_data);
+					this.handleIncomingDmxPacket(data);
 					break;
 				default:
-					this.emit("error", new Error("Unknown Enttec USB message", { cause: raw_data }));
+					this.emit("error", new Error("Unknown Enttec USB message", { cause: full_message }));
 					break;
 			}
 		});
@@ -194,27 +205,31 @@ export class EnttecUsbMk2Pro extends TEventEmitter<{
 		this.serialport.on("error", (error) => this.emit("error", error));
 	}
 
-	protected handleIncomingParamsReply(raw_data: any) {
-		this.emit("params", raw_data);
+	protected handleIncomingParamsReply(full_message: Uint8Array) {
+		this.emit("params", full_message);
 	}
 
 	/**
 	 * Store the last received dmx data values and
 	 * emit the packet as a `dmxdata event.
-	 * @param raw_data
+	 * @param full_message
 	 * @private
 	 */
-	protected handleIncomingDmxPacket(raw_data: number[] | ArrayBuffer | Buffer) {
-		const new_data = new Uint8ClampedArray(raw_data.slice(6));
+	protected handleIncomingDmxPacket(full_message: Uint8Array) {
+		const dmx_data = new Uint8ClampedArray(513);
+		try {
+			// Remove the last byte, add starting spacer byte
+			dmx_data.set(full_message.slice(6, full_message.byteLength - 1), 1);
 
-		console.info("EnttecProUSB::handleIncomingDmxPacket", raw_data);
-
-		// Ignore if the data hasn't changed
-		if (Equality.arraysEqual(new_data, this.received_data)) {
-			return;
+			// Ignore if the data hasn't changed
+			if (Equality.arraysEqual(dmx_data, this.received_data)) {
+				return;
+			}
+			this.received_data.set(dmx_data);
+			this.emit("dmx_data", dmx_data);
+		} catch (error) {
+			this.emit("error", error instanceof Error ? error : new Error(String(error)));
 		}
-		this.received_data.set(new_data);
-		this.emit("dmx_data", new Uint8ClampedArray(raw_data));
 	}
 
 	/**
@@ -239,18 +254,18 @@ export class EnttecUsbMk2Pro extends TEventEmitter<{
 	/**
 	 * Sends a single packet to the usbpro.
 	 * @param label The message label.
-	 * @param data The message payload.
+	 * @param payload The message payload.
 	 * @returns  A promise indicating when the data has been sent.
 	 */
-	protected sendPacket(label: EnttecMessageLabels, data: ArrayBuffer | ArrayLike<number>) {
-		const byte_length = data instanceof ArrayBuffer ? data.byteLength : data.length;
-		const buffer = new Uint8Array(byte_length + 5);
+	protected sendPacket(label: EnttecMessageLabels, payload: ArrayBuffer | Buffer | number[]) {
+		const byte_length = getLength(payload);
+		const buffer = new Uint8Array(byte_length + 5); // 5 = front header + end delineator
 		const data_view = new DataView(buffer.buffer);
 
 		data_view.setUint8(0, EnttecMessageLabels.DMX_START_CODE);
 		data_view.setUint8(1, label);
 		data_view.setUint16(2, byte_length, true);
-		buffer.set(new Uint8Array(data), 4);
+		buffer.set(new Uint8Array(payload), 4);
 		data_view.setUint8(buffer.byteLength - 1, EnttecMessageLabels.DMX_END_CODE); // usbpro packet end marker
 
 		return this.write(buffer);
@@ -262,7 +277,7 @@ export class EnttecUsbMk2Pro extends TEventEmitter<{
 	 * DMX Address 1 is Index 1.
 	 * @param port - Zero based porn number to send the data to
 	 */
-	public async setAll(port: 0 | 1, dmx_data: Uint8ClampedArray | Uint8Array | number[]) {
+	public async setAll(port: 0 | 1, dmx_data: Uint8ClampedArray | Uint8Array | Buffer | number[]) {
 		// for whatever-reason, dmx-transmission has to start with a zero-byte.
 		dmx_data[0] = 0;
 		const label = [EnttecMessageLabels.SEND_DMX_PORT1, EnttecMessageLabels.SEND_DMX_PORT2][port];
@@ -287,9 +302,11 @@ export class EnttecUsbMk2Pro extends TEventEmitter<{
 		}
 	}
 
+	/** Gets the last read DMX value */
 	public getReadValue(address: number) {
 		return this.received_data[address];
 	}
+	/** Gets a copy of the last read DMX values */
 	public getAllRead() {
 		return new Uint8ClampedArray(this.received_data);
 	}
@@ -308,8 +325,7 @@ export class EnttecUsbMk2Pro extends TEventEmitter<{
 
 	/**
 	 * Request the current config & status information
-	 *
-	 * @todo
+	 * @todo No parsing implemented
 	 */
 	protected async getDeviceInfo() {
 		this.serialport.drain();
@@ -317,7 +333,7 @@ export class EnttecUsbMk2Pro extends TEventEmitter<{
 	}
 
 	/**
-	 * Set the DMX device to input _mode
+	 * Tells the Enttec to start reading incoming DMX data from Port 1
 	 */
 	public async startDmxRead() {
 		// this._mode = "receive";

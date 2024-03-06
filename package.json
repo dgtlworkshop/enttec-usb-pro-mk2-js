@@ -1,6 +1,6 @@
 {
 	"name": "@dgtlworkshop/enttec-usb-pro-mk2",
-	"version": "2.0.0-alpha.3",
+	"version": "2.0.0",
 	"description": "Typescript API for interacting with an Enttec DMX USB Pro Mk2",
 	"module": "dist/index.js",
 	"types": "dist/index.d.ts",
@@ -35,10 +35,11 @@
 	"homepage": "https://github.com/dgtlworkshop/enttec-usb-pro-mk2-js#readme",
 	"dependencies": {
 		"@dgtlworkshop/handyjs": "^1.4.0",
-		"serialport": "^10.5.0"
+		"@serialport/parser-packet-length": "^12.0.0",
+		"serialport": "^12.0.0"
 	},
 	"devDependencies": {
-		"@types/serialport": "^8.0.2",
+		"@types/node": "^20.11.25",
 		"prettier": "^2.8.4",
 		"publint": "^0.2.7",
 		"typescript": "^5.3.3"
