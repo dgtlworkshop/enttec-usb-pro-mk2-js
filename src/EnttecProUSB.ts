@@ -1,5 +1,5 @@
 import { Chrono, Equality } from "@dgtlworkshop/handyjs";
-import { SerialPort } from "serialport";
+import { PacketLengthParser, SerialPort } from "serialport";
 import { EnttecMessageLabels } from "./EnttecMessageLabels.js";
 import { TEventEmitter } from "./TEventEmitter.js";
 
@@ -34,7 +34,8 @@ export class EnttecUsbMk2Pro extends TEventEmitter<{
 	params: (raw_data: any) => void;
 	dmx_data: (current_data: Uint8ClampedArray) => void;
 }> {
-	private serialport: SerialPort;
+	private readonly serialport: SerialPort;
+	private readonly parser;
 	// private _mode: "send" | "receive" = "send";
 	// public get mode(): "send" | "receive" {
 	// 	return this._mode;
@@ -73,6 +74,15 @@ export class EnttecUsbMk2Pro extends TEventEmitter<{
 			stopBits: 2,
 			parity: "none",
 		});
+		this.parser = this.serialport.pipe(
+			new PacketLengthParser({
+				delimiter: EnttecMessageLabels.DMX_START_CODE,
+				packetOverhead: 5,
+				lengthBytes: 2,
+				lengthOffset: 2,
+				maxLen: 650,
+			}),
+		);
 		this.retry_connection_timeout = options.retry_connection_timeout ?? 2000;
 	}
 
